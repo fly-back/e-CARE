@@ -234,9 +234,10 @@ def compute_ppl(hps, model, tokenizer, data):
             
             # label_mask = torch.LongTensor(label_inputs['attention_mask']).unsqueeze(0).cuda()
             attention_mask = torch.cat((attention_mask, torch.ones(1, label_ids.shape[1]).long().cuda()), 1)
-            label_ids = torch.cat((torch.LongTensor([-100]*input_ids.shape[1]).unsqueeze(0).cuda(), label_ids), 1)
+            label_ids = torch.cat((input_ids, label_ids), 1)
             input_ids = torch.cat((input_ids, label_ids[:, input_ids.shape[1]:]), 1)
             with torch.no_grad():
+                # print(f"Input IDs: {input_ids}\nTrue labels: {label_ids}\nAttention mask: {attention_mask}")
                 loss = model(input_ids, attention_mask=attention_mask, labels=label_ids)[0]
                 lls.append(loss * length)
                 

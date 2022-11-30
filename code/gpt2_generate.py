@@ -60,7 +60,7 @@ def main():
             project="anlp-causal-generation", 
             entity="specteross", 
             config=hps, 
-            name=f"{hps.model_dir} prompting-{hps.prompt_type if hps.atcon else 'False'} loss-BCE bs-{hps.batch_size} lr-{hps.lr} seed-{hps.seed}{' shuffle' if hps.shuffle else ''}"
+            name=f"{hps.model_dir}TF prompting-{hps.prompt_type if hps.atcon else 'False'} loss-BCE bs-{hps.batch_size} lr-{hps.lr} seed-{hps.seed}{' shuffle' if hps.shuffle else ''}"
         )
     logger, formatter = define_logger()
     nowtime = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -82,6 +82,11 @@ def main():
     train_data = load_data(os.path.join(hps.data_dir, hps.train))
     dev_data = load_data(os.path.join(hps.data_dir, hps.dev))
     test_data = load_data(os.path.join(hps.data_dir, hps.test))
+
+    # Truncate for debugging 
+    # train_data = train_data[:5]
+    # dev_data = dev_data[:2]
+    # test_data = test_data[:3]
 
     # Tokenization
     logger.info("[INFO] Tokenization and Padding for Data")
@@ -141,16 +146,17 @@ def main():
             for j in range(input_ids.shape[0]):
                 if true_labels is None:
                     # true_labels = torch.cat((torch.ones(count_mask_length[j]).long(), input_ids[j, count_mask_length[j]:].cpu())).unsqueeze(0)
-                    true_labels = torch.cat((input_ids[j, :-count_mask_length[j]]*0-100, input_ids[j, -count_mask_length[j]:])).unsqueeze(0)
+                    true_labels = torch.cat((input_ids[j, :-count_mask_length[j]], input_ids[j, -count_mask_length[j]:])).unsqueeze(0)
                 else:
                     # true_labels = torch.cat((true_labels, torch.cat((torch.ones(count_mask_length[j]).long(), input_ids[j, count_mask_length[j]:].cpu())).unsqueeze(0)), 0)
-                    true_labels = torch.cat((true_labels, torch.cat((input_ids[j, :-count_mask_length[j]]*0-100, input_ids[j, -count_mask_length[j]:])).unsqueeze(0)),0)
+                    true_labels = torch.cat((true_labels, torch.cat((input_ids[j, :-count_mask_length[j]], input_ids[j, -count_mask_length[j]:])).unsqueeze(0)),0)
 
             # true_labels = true_labels.cuda()
 
 
             # loss = model(input_ids=input_ids, attention_mask=input_mask, token_type_ids=input_seg_ids, true_labels=true_labels, mode='train')[0]
             # pdb.set_trace()
+            # print(f"Input IDs: {input_ids}\nTrue labels: {true_labels}\nInput labels: {input_labels}\nInput mask: {input_mask}\nLabels mask: {input_labels_mask}")
             output = model(input_ids=input_ids, attention_mask=input_mask, token_type_ids=input_seg_ids, labels=true_labels)
             loss = output[0]
 
