@@ -214,6 +214,7 @@ def tokenize_multi_task(hps, data):
 
 def compute_ppl(hps, model, tokenizer, data):
     # device = 'cuda'
+    model.eval()
     if hps.model_name == 'gpt2':
         lls = []
         total_length = 0
@@ -610,7 +611,7 @@ def get_generative_tokenizer(hps):
     else:
         tokenizer = None
 
-    if hps.atcon:
+    if hps.atcon and hps.prompt_type == "special_tokens":
         # Add special tokens to condition on, while prompting the model
         special_tokens_dict = {
             'additional_special_tokens': [CAUSE_TOKEN, EFFECT_TOKEN, EXPL_TOKEN]
@@ -623,7 +624,10 @@ def get_generative_tokenizer(hps):
 
 def build_input_output_pair(cause, effect, explanation, hps): 
     if hps.atcon: 
-        seq1 = f"For {CAUSE_TOKEN} {cause} {EFFECT_TOKEN} {effect} {EXPL_TOKEN}"
+        if hps.prompt_type == 'special_tokens':
+            seq1 = f"{CAUSE_TOKEN} {cause} {EFFECT_TOKEN} {effect} {EXPL_TOKEN} "
+        else: 
+            seq1 = f"For cause {cause} And effect {effect} The explanation is that "
         seq2 = f"{explanation}"
     else: 
         seq1 = f"{cause} {effect}"
@@ -982,9 +986,9 @@ def bart_evaluate(model, data_loader, hps):
 
     num_instances = (len(data_loader)-1) * hps.batch_size + input_ids.shape[0]
 
-    fo = open(hps.output_dir+'/bart_predict_'+nowtime+'.csv', 'w', encoding='utf-8')
-    writer = csv.writer(fo)
-    writer.writerows(output_text)
+    with open(hps.output_dir+'/bart_predict_'+nowtime+'.csv', 'w', encoding='utf-8') as fo:
+        writer = csv.writer(fo)
+        writer.writerows(output_text)
 
     return bleu1/num_instances, bleu2/num_instances, bleu3/num_instances, bleu4/num_instances, rouge1r/num_instances, rouge2r/num_instances, rougelr/num_instances
 

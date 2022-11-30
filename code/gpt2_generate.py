@@ -33,6 +33,7 @@ def main():
 
     # Experimental/Ablation Settings
     parser.add_argument('--atcon', type=bool, default=False, help='Whether to use attribute conditioning (AtCon) via prompting')
+    parser.add_argument('--prompt_type', type=str, default="special_tokens", help='Whether to use special tokens for prompting or not')
 
     # Model/Hyperparam Settings
     parser.add_argument('--model_name', type=str, default='gpt2', help='Pretrained model name')
@@ -49,7 +50,7 @@ def main():
     parser.add_argument('--patient', type=int, default=10, help='the patient of early-stopping')
     parser.add_argument('--length', type=int, default=22, help='the max length of generated text')
     parser.add_argument('--output_dir', type=str, default='./output/output_examples')
-    parser.add_argument('--wandb', type=bool, default=False, help="If set True, log results to wandb")
+    parser.add_argument('--wandb', type=bool, default=True, help="If set True, log results to wandb")
 
     # parsing the hyper-parameters from command line and define logger
     hps = parser.parse_args()
@@ -59,7 +60,7 @@ def main():
             project="anlp-causal-generation", 
             entity="specteross", 
             config=hps, 
-            name=f"{hps.model_dir} prompting-{hps.atcon} loss-BCE bs-{hps.batch_size} lr-{hps.lr} seed-{hps.seed}{' shuffle' if hps.shuffle else ''}"
+            name=f"{hps.model_dir} prompting-{hps.prompt_type if hps.atcon else 'False'} loss-BCE bs-{hps.batch_size} lr-{hps.lr} seed-{hps.seed}{' shuffle' if hps.shuffle else ''}"
         )
     logger, formatter = define_logger()
     nowtime = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -78,9 +79,9 @@ def main():
     # load data
     # logger.info("[Pytorch] %s", torch.)
     logger.info("[INFO] Loading Data")
-    train_data = load_data(os.path.join(hps.data_dir, hps.train))[:10]
-    dev_data = train_data
-    test_data = train_data
+    train_data = load_data(os.path.join(hps.data_dir, hps.train))
+    dev_data = load_data(os.path.join(hps.data_dir, hps.dev))
+    test_data = load_data(os.path.join(hps.data_dir, hps.test))
 
     # Tokenization
     logger.info("[INFO] Tokenization and Padding for Data")
@@ -161,34 +162,35 @@ def main():
             optimizer.step()
 
         if hps.wandb:
+            train_ppl = compute_ppl(hps, model, tokenizer, train_data)
             wandb.log({
-                "epoch": epoch, "train_loss": total_loss / len(train_dataloader)
+                "epoch": epoch, "train_loss": total_loss / len(train_dataloader), "train_ppl": train_ppl
             })
 
-    model.eval()
+        model.eval()
 
-    with torch.no_grad():
-        print('\n')
-        logger.info("[Dev Evaluation] Start Evaluation on Dev Set")
-        dev_bleu1, dev_bleu2, dev_bleu3, dev_bleu4, dev_rouge1, dev_rouge2, dev_rougel = gpt2_evaluate(model, tokenizer, hps.length, dev_dataloader, hps)
-        print('\n')
-        logger.info("[Dev Metrics] Dev BLEU: \t({}, {}, {}, {})".format(dev_bleu1, dev_bleu2, dev_bleu3, dev_bleu4))
-        logger.info("[Dev Metrics] Dev Rouge: \t({}, {}, {})".format(dev_rouge1, dev_rouge2, dev_rougel))
+        with torch.no_grad():
+            print('\n')
+            logger.info("[Dev Evaluation] Start Evaluation on Dev Set")
+            dev_bleu1, dev_bleu2, dev_bleu3, dev_bleu4, dev_rouge1, dev_rouge2, dev_rougel = gpt2_evaluate(model, tokenizer, hps.length, dev_dataloader, hps)
+            print('\n')
+            logger.info("[Dev Metrics] Dev BLEU: \t({}, {}, {}, {})".format(dev_bleu1, dev_bleu2, dev_bleu3, dev_bleu4))
+            logger.info("[Dev Metrics] Dev Rouge: \t({}, {}, {})".format(dev_rouge1, dev_rouge2, dev_rougel))
 
-        dev_ppl = compute_ppl(hps, model, tokenizer, dev_data)
-        logger.info('[PPL] Model Perplexity On Dev Set is {}'.format(dev_ppl))
+            dev_ppl = compute_ppl(hps, model, tokenizer, dev_data)
+            logger.info('[PPL] Model Perplexity On Dev Set is {}'.format(dev_ppl))
 
-        
-        if hps.wandb:
-            wandb.log({
-                "epoch": epoch, "dev_perplexity": dev_ppl,
-                "dev_bleu1": dev_bleu1, "dev_bleu2": dev_bleu2, "dev_bleu3": dev_bleu3, "dev_bleu4": dev_bleu4, 
-                "dev_rouge1": dev_rouge1, "dev_rouge2": dev_rouge2, "dev_rouge-l": dev_rougel, 
-            })
+            
+            if hps.wandb:
+                wandb.log({
+                    "epoch": epoch, "dev_perplexity": dev_ppl,
+                    "dev_bleu1": dev_bleu1, "dev_bleu2": dev_bleu2, "dev_bleu3": dev_bleu3, "dev_bleu4": dev_bleu4, 
+                    "dev_rouge1": dev_rouge1, "dev_rouge2": dev_rouge2, "dev_rouge-l": dev_rougel, 
+                })
 
-        #     if dev_bleu1 + dev_rouge1 >= best_accuracy:
-        #         patient = 0
-        #         best_accuracy = dev_bleu1 + dev_rouge1
+            if dev_bleu1 + dev_rouge1 >= best_accuracy:
+                patient = 0
+                best_accuracy = dev_bleu1 + dev_rouge1
         #         logger.info("[Saving] Saving Model to {}".format(hps.save_dir))
         #         # torch.save(model, os.path.join(hps.save_dir, '{}_{}'.format('generated', hps.model_name)))
         #         logger.info("[Test Evaluation] Start Evaluation on Test Set")
@@ -207,14 +209,14 @@ def main():
         #                 "test_bleu1": test_bleu1, "test_bleu2": test_bleu2, "test_bleu3": test_bleu3, "test_bleu4": test_bleu4, 
         #                 "test_rouge1": test_rouge1, "test_rouge2": test_rouge2, "test_rouge-l": test_rougel, 
         #             })
-        #     else:
-        #         patient += 1
+            else:
+                patient += 1
 
-        #     logger.info("[Patient] {}".format(patient))
+            logger.info("[Patient] {}".format(patient))
 
-        # if patient >= hps.patient:
-        #     logger.info("[INFO] Stopping Training by Early Stopping")
-        #     break
+        if patient >= hps.patient:
+            logger.info("[INFO] Stopping Training by Early Stopping")
+            break
 
 if __name__ == '__main__':
     main()
