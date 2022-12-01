@@ -11,11 +11,11 @@ python3 gpt2_generate.py \
 	--gpu '0' \
 	--batch_size 32 \
 	--epochs 10 \
-	--lr 2e-5 \
+	--lr 1e-5 \
     --set_seed True \
 	--seed 1024 \
 	--patient 5 \
-	--length 22 \
+	--length 15 \
 
 python3 gpt2_generate.py \
 	--data_dir '../data/Explanation_Generation/' \
@@ -30,11 +30,11 @@ python3 gpt2_generate.py \
 	--gpu '0' \
 	--batch_size 32 \
 	--epochs 10 \
-	--lr 2e-5 \
+	--lr 1e-5 \
     --set_seed True \
 	--seed 1024 \
 	--patient 5 \
-	--length 22 \
+	--length 15 \
     --atcon True \
 
 python3 gpt2_generate.py \
@@ -50,10 +50,10 @@ python3 gpt2_generate.py \
 	--gpu '0' \
 	--batch_size 32 \
 	--epochs 10 \
-	--lr 2e-5 \
+	--lr 1e-5 \
     --set_seed True \
 	--seed 1024 \
 	--patient 5 \
-	--length 22 \
+	--length 15 \
     --atcon True \
     --prompt_type 'words' \

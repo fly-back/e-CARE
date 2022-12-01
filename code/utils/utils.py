@@ -238,7 +238,8 @@ def compute_ppl(hps, model, tokenizer, data):
             input_ids = torch.cat((input_ids, label_ids[:, input_ids.shape[1]:]), 1)
             with torch.no_grad():
                 # print(f"Input IDs: {input_ids}\nTrue labels: {label_ids}\nAttention mask: {attention_mask}")
-                loss = model(input_ids, attention_mask=attention_mask, labels=label_ids)[0]
+                assert torch.equal(input_ids, label_ids)
+                loss = model(input_ids, labels=label_ids)[0]
                 lls.append(loss * length)
                 
         ppl = torch.exp(torch.stack(lls).sum() / total_length)
@@ -843,15 +844,17 @@ def gpt2_evaluate(model, tokenizer, length, data_loader, hps):
 
         # output = sample_sequence(model, length, device='cuda', context=premise_ids, batch_size=hps.batch_size, attention_mask=premise_mask, input_type='ids')
         generation_offset = premise_ids.shape[-1]
-        generated = model.generate(input_ids=premise_ids, 
-                                   attention_mask=premise_mask, 
-                                   max_length=length+generation_offset, 
-                                   num_beams=5, 
-                                   early_stopping=True, 
-                                   do_sample=True,
-                                   no_repeat_ngram_size=3,
-                                   repetition_penalty=1.5
-                                   )
+        generated = model.generate(
+            input_ids=premise_ids, 
+            attention_mask=premise_mask, 
+            max_length=length+generation_offset, 
+            min_length=3,
+            # num_beams=5, 
+            # early_stopping=True, 
+            # do_sample=True,
+            no_repeat_ngram_size=3,
+            repetition_penalty=1.2
+        )
 
         # generated = output[:, premise_ids.shape[1]:]
         # pdb.set_trace()

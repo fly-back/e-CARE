@@ -157,7 +157,8 @@ def main():
             # loss = model(input_ids=input_ids, attention_mask=input_mask, token_type_ids=input_seg_ids, true_labels=true_labels, mode='train')[0]
             # pdb.set_trace()
             # print(f"Input IDs: {input_ids}\nTrue labels: {true_labels}\nInput labels: {input_labels}\nInput mask: {input_mask}\nLabels mask: {input_labels_mask}")
-            output = model(input_ids=input_ids, attention_mask=input_mask, token_type_ids=input_seg_ids, labels=true_labels)
+            assert torch.equal(input_ids, true_labels)
+            output = model(input_ids=input_ids, token_type_ids=input_seg_ids, labels=true_labels)
             loss = output[0]
 
             total_loss += loss.item()
