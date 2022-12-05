@@ -1,5 +1,5 @@
 import argparse
-from utils.utils import load_data, define_logger, tokenize_gen, evaluate_gpt2, gpt2_evaluate, compute_ppl
+from utils.utils import load_data, define_logger, compute_ppl
 import random
 import numpy as np
 import torch
@@ -410,7 +410,10 @@ def main():
     parser.add_argument('--dev', type=str, default='dev.pkl', help='The dev data directory')
     parser.add_argument('--test', type=str, default='test.pkl', help='The test data directory')
 
-    # Model Settings
+    # Experimental/Ablation Settings
+    parser.add_argument('--atcon', type=bool, default=True, help='Whether to use attribute conditioning (AtCon) via prompting')
+
+    # Model/Hyperparam Settings
     parser.add_argument('--model_name', type=str, default='gpt2', help='Pretrained model name')
     parser.add_argument('--cuda', type=bool, default=True, help='Whether to use gpu for training')
     parser.add_argument('--gpu', type=str, default='0', help='Gpu ids for training')
@@ -568,7 +571,7 @@ def main():
         logger.info("[Dev Evaluation] Start Evaluation on Dev Set")
         dev_accuracy, dev_bleu1, dev_bleu2, dev_bleu3, dev_bleu4, dev_rouge1,dev_rouge2, dev_rougel, dev_loss, dev_attack_accuracy, dev_attack_loss = \
             evaluate(hps, model, dev_dataloader, loss_function, loss_function2, optimizer)
-        dev_ppl = compute_ppl(hps, model, dev_data)
+        dev_ppl = compute_ppl(hps, model, tokenizer, dev_data)
         logger.info("[Dev Metrics] Dev Perplexity: \t{}".format(dev_ppl))
         print('\n')
         logger.info("[Dev Metrics] Dev Accuracy: \t{}".format(dev_accuracy))
@@ -596,7 +599,7 @@ def main():
 
             test_accuracy, test_bleu1, test_bleu2, test_bleu3, test_bleu4, test_rouge1,test_rouge2, test_rougel, test_loss, test_attack_accuracy, test_attack_loss  = \
                 evaluate(hps, model, test_dataloader, loss_function, loss_function2, optimizer)
-            test_ppl = compute_ppl(hps, model, test_data)
+            test_ppl = compute_ppl(hps, model, tokenizer, test_data)
             logger.info("[Test Metrics] Test Perplexity: \t{}".format(test_ppl))
             if hps.wandb:
                 wandb.log({

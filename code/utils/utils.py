@@ -20,6 +20,8 @@ import json
 import os
 import pandas as pd
 
+from utils.constants import CAUSE_TOKEN, EFFECT_TOKEN, EXPL_TOKEN
+
 # For error analysis
 OUTPUT_LOG_DIR = '../error_analysis'; os.makedirs(OUTPUT_LOG_DIR, exist_ok=True)
 
@@ -215,15 +217,18 @@ def tokenize_multi_task(hps, data):
     return input_ids1, input_ids2, truth_ids[:, 1:], mask1, mask2, mask_truth[:, 1:], torch.LongTensor(labels)
 
 
-def compute_ppl(hps, model, data):
+def compute_ppl(hps, model, tokenizer, data):
     # device = 'cuda'
+    model.eval()
     if hps.model_name == 'gpt2':
-        tokenizer = GPT2Tokenizer.from_pretrained(hps.model_dir)
         lls = []
         total_length = 0
         for example in data:
-            input_text = example['cause'] + ' ' + example['effect']
-            truth = example['conceptual_explanation']
+            c = example['cause']
+            e = example['effect']
+            exp = example['conceptual_explanation']
+            input_text, truth = build_input_output_pair(c, e, exp, hps)
+
             inputs = tokenizer(input_text)
             input_ids = torch.LongTensor(inputs['input_ids']).unsqueeze(0).cuda()
             attention_mask = torch.LongTensor(inputs['attention_mask']).unsqueeze(0).cuda()
@@ -243,12 +248,14 @@ def compute_ppl(hps, model, data):
         ppl = torch.exp(torch.stack(lls).sum() / total_length)
 
     else:
-        tokenizer = BartTokenizer.from_pretrained(hps.model_dir)
         lls = []
         total_length = 0
         for example in data:
-            input_text = example['cause'] + ' ' + example['effect']
-            truth = example['general_truth']
+            c = example['cause']
+            e = example['effect']
+            exp = example['conceptual_explanation']
+            input_text, truth = build_input_output_pair(c, e, exp, hps)
+
             inputs = tokenizer(input_text)
             input_ids = torch.LongTensor(inputs['input_ids']).unsqueeze(0).cuda()
             attention_mask = torch.LongTensor(inputs['attention_mask']).unsqueeze(0).cuda()
@@ -600,7 +607,7 @@ def define_logger():
     return logger, formatter
 
 
-def tokenize_gen(data, hps):
+def get_generative_tokenizer(hps): 
     if hps.model_name == 'bart':
         tokenizer = BartTokenizer.from_pretrained(hps.model_dir)
     elif hps.model_name == 'gpt2':
@@ -609,20 +616,52 @@ def tokenize_gen(data, hps):
     else:
         tokenizer = None
 
+    if hps.atcon and hps.prompt_type == "special_tokens":
+        # Add special tokens to condition on, while prompting the model
+        special_tokens_dict = {
+            'additional_special_tokens': [CAUSE_TOKEN, EFFECT_TOKEN, EXPL_TOKEN]
+        }
+        print(f"\n\nAdding special tokens to {hps.model_name} vocabulary...\n")
+        tokenizer.add_special_tokens(special_tokens_dict)
+        # TODO: figure out where to add: model.resize_token_embeddings(len(tokenizer))
+    return tokenizer
+
+
+def build_input_output_pair(cause, effect, explanation, hps): 
+    if hps.atcon: 
+        if hps.prompt_type == 'special_tokens':
+            seq1 = f"{CAUSE_TOKEN} {cause} {EFFECT_TOKEN} {effect} {EXPL_TOKEN} "
+        else: 
+            seq1 = f"For cause {cause} And effect {effect} The explanation is that "
+        seq2 = f"{explanation}"
+    else: 
+        seq1 = f"{cause} {effect}"
+        seq2 = f"{explanation}"
+    return seq1, seq2
+
+
+def tokenize_gen(data, tokenizer, hps):
     inputs = []
     labels = []
     premise = []
+    
+    print(f"Special tokens in model vocabulary:\n{tokenizer.special_tokens_map}")
+
     for example in data:
+        c = example['cause']
+        e = example['effect']
+        exp = example['conceptual_explanation']
+
+        seq1, seq2 = build_input_output_pair(c, e, exp, hps)
+
         if hps.model_name == 'bart':
-            seq1 = example['cause'] + example['effect']
-            seq2 = example['general_truth']
             inputs.append(seq1)
             labels.append(seq2)
         elif hps.model_name == 'gpt2':
-            #print(example)
-            inputs.append([example['cause']+' '+example['effect'], example['conceptual_explanation']])
-            premise.append(example['cause']+' '+example['effect'])
-            labels.append(example['conceptual_explanation'])
+            premise.append(seq1)
+            labels.append(seq2)
+            inputs.append([seq1, seq2])
+            print(f"\nGPT2 input data item: {[seq1, seq2]}")
         else:
             return
 
@@ -637,6 +676,7 @@ def tokenize_gen(data, hps):
         return input_ids, input_attention_mask, label_ids, label_attention_mask
 
     elif hps.model_name == 'gpt2':
+        tokenizer.padding_side = 'right'
         evaluate_outputs = tokenizer(labels, padding=True, return_token_type_ids=True)
         labels_ids = torch.LongTensor(evaluate_outputs['input_ids'])
         labels_mask = torch.LongTensor(evaluate_outputs['attention_mask'])
@@ -655,64 +695,64 @@ def tokenize_gen(data, hps):
         return input_ids, input_attention_mask, input_seg_id, labels_ids, labels_mask, labels_seg_id, premise_ids, premise_mask, premise_seg_ids
 
 
-def evaluation_bart(dataloader, model, hps):
-    tokenizer = BartTokenizer.from_pretrained(hps.model_dir)
-    score = 0
-    for batch in dataloader:
-        if hps.cuda:
-            batch = tuple(term.cuda() for term in batch)
+# def evaluation_bart(dataloader, model, hps):
+#     tokenizer = BartTokenizer.from_pretrained(hps.model_dir)
+#     score = 0
+#     for batch in dataloader:
+#         if hps.cuda:
+#             batch = tuple(term.cuda() for term in batch)
 
-        input_ids, input_mask, labels, label_mask = batch
-        predict_id = torch.zeros([input_ids.shape[0], 1]).long().cuda()
-        decoder_ids = torch.zeros([input_ids.shape[0], 1]).long().cuda()
+#         input_ids, input_mask, labels, label_mask = batch
+#         predict_id = torch.zeros([input_ids.shape[0], 1]).long().cuda()
+#         decoder_ids = torch.zeros([input_ids.shape[0], 1]).long().cuda()
 
-        while decoder_ids.shape[1] < 35 and predict_id.tolist() not in [[[2], [2]], [[1], [1]]]:
-            output = model(input_ids, input_mask=input_mask, decoder_ids=decoder_ids, mode='test')
-            predict_id = torch.argmax(output[0][:, -1, :], -1).unsqueeze(1)
+#         while decoder_ids.shape[1] < 35 and predict_id.tolist() not in [[[2], [2]], [[1], [1]]]:
+#             output = model(input_ids, input_mask=input_mask, decoder_ids=decoder_ids, mode='test')
+#             predict_id = torch.argmax(output[0][:, -1, :], -1).unsqueeze(1)
 
-            decoder_ids = torch.cat((decoder_ids, predict_id), -1)
+#             decoder_ids = torch.cat((decoder_ids, predict_id), -1)
 
-        label_tokens = [tokenizer.convert_ids_to_tokens(labels[i]) for i in range(labels.shape[0])]
-        predict_tokens = [tokenizer.convert_ids_to_tokens(decoder_ids[i]) for i in range(decoder_ids.shape[0])]
-        references = [tokenizer.convert_tokens_to_string(tokens) for tokens in label_tokens]
-        hypothesis = [tokenizer.convert_tokens_to_string(tokens) for tokens in predict_tokens]
-        references = [remove_special_tokens(text) for text in references]
-        hypothesis = [remove_special_tokens(text) for text in hypothesis]
+#         label_tokens = [tokenizer.convert_ids_to_tokens(labels[i]) for i in range(labels.shape[0])]
+#         predict_tokens = [tokenizer.convert_ids_to_tokens(decoder_ids[i]) for i in range(decoder_ids.shape[0])]
+#         references = [tokenizer.convert_tokens_to_string(tokens) for tokens in label_tokens]
+#         hypothesis = [tokenizer.convert_tokens_to_string(tokens) for tokens in predict_tokens]
+#         references = [remove_special_tokens(text) for text in references]
+#         hypothesis = [remove_special_tokens(text) for text in hypothesis]
 
-        score += sum([bleu([references[i]], hypothesis[i]) for i in range(len(references))])
+#         score += sum([bleu([references[i]], hypothesis[i]) for i in range(len(references))])
 
-    return score / len(dataloader) / hps.batch_size
+#     return score / len(dataloader) / hps.batch_size
 
 
-def evaluate_gpt2(dataloader, model, hps):
-    tokenizer = GPT2Tokenizer.from_pretrained(hps.model_dir)
-    score = 0
-    for batch in dataloader:
-        if hps.cuda:
-            batch = tuple(term.cuda() for term in batch)
+# def evaluate_gpt2(dataloader, model, hps):
+#     tokenizer = GPT2Tokenizer.from_pretrained(hps.model_dir)
+#     score = 0
+#     for batch in dataloader:
+#         if hps.cuda:
+#             batch = tuple(term.cuda() for term in batch)
 
-        gen_ids, gen_mask, _, premise_ids, premise_mask, premise_token_type_ids = batch
-        decode_ids = torch.zeros([premise_ids.shape[0], 1]).long().cuda()
-        predict_id = torch.zeros([premise_ids.shape[0], 1]).long().cuda()
+#         gen_ids, gen_mask, _, premise_ids, premise_mask, premise_token_type_ids = batch
+#         decode_ids = torch.zeros([premise_ids.shape[0], 1]).long().cuda()
+#         predict_id = torch.zeros([premise_ids.shape[0], 1]).long().cuda()
 
-        while decode_ids.shape[1] <= 35 and predict_id.tolist() != (torch.ones([hps.batch_size, 1]).long()*50256).tolist():
-            output = model(premise_ids, premise_mask, token_type_ids=premise_token_type_ids, mode='test')
-            predict_id = torch.argmax(output[1][:, -1, :], -1).unsqueeze(1)
-            decode_ids = torch.cat((decode_ids, predict_id), -1)
-            premise_ids = torch.cat((premise_ids, predict_id), -1)
-            premise_mask = torch.cat((premise_mask, torch.ones([premise_mask.shape[0], 1]).long().cuda()), -1)
-            premise_token_type_ids = torch.cat((premise_token_type_ids, torch.ones([premise_token_type_ids.shape[0], 1]).long().cuda()), -1)
+#         while decode_ids.shape[1] <= 35 and predict_id.tolist() != (torch.ones([hps.batch_size, 1]).long()*50256).tolist():
+#             output = model(premise_ids, premise_mask, token_type_ids=premise_token_type_ids, mode='test')
+#             predict_id = torch.argmax(output[1][:, -1, :], -1).unsqueeze(1)
+#             decode_ids = torch.cat((decode_ids, predict_id), -1)
+#             premise_ids = torch.cat((premise_ids, predict_id), -1)
+#             premise_mask = torch.cat((premise_mask, torch.ones([premise_mask.shape[0], 1]).long().cuda()), -1)
+#             premise_token_type_ids = torch.cat((premise_token_type_ids, torch.ones([premise_token_type_ids.shape[0], 1]).long().cuda()), -1)
 
-        label_tokens = [tokenizer.convert_ids_to_tokens(gen_ids[i]) for i in range(gen_ids.shape[0])]
-        predict_tokens = [tokenizer.convert_ids_to_tokens(decode_ids[i][1:]) for i in range(decode_ids.shape[0])]
-        references = [tokenizer.convert_tokens_to_string(tokens) for tokens in label_tokens]
-        hypothesis = [tokenizer.convert_tokens_to_string(tokens) for tokens in predict_tokens]
-        references = [remove_special_tokens(text) for text in references]
-        hypothesis = [remove_special_tokens(text) for text in hypothesis]
+#         label_tokens = [tokenizer.convert_ids_to_tokens(gen_ids[i]) for i in range(gen_ids.shape[0])]
+#         predict_tokens = [tokenizer.convert_ids_to_tokens(decode_ids[i][1:]) for i in range(decode_ids.shape[0])]
+#         references = [tokenizer.convert_tokens_to_string(tokens) for tokens in label_tokens]
+#         hypothesis = [tokenizer.convert_tokens_to_string(tokens) for tokens in predict_tokens]
+#         references = [remove_special_tokens(text) for text in references]
+#         hypothesis = [remove_special_tokens(text) for text in hypothesis]
 
-        score += sum([bleu([references[i]], hypothesis[i]) for i in range(len(references))])
+#         score += sum([bleu([references[i]], hypothesis[i]) for i in range(len(references))])
 
-    return score / len(dataloader) / hps.batch_size
+#     return score / len(dataloader) / hps.batch_size
 
 
 def remove_special_tokens(text):
@@ -793,9 +833,7 @@ def sample_sequence(model, length, start_token=None, batch_size=None, context=No
     return output if input_type == 'ids' else output_id
 
 
-def gpt2_evaluate(model, length, data_loader, hps):
-    tokenizer = GPT2Tokenizer.from_pretrained(hps.model_dir)
-
+def gpt2_evaluate(model, tokenizer, length, data_loader, hps):
     bleu1, bleu2, bleu3, bleu4 = 0, 0, 0, 0
     rouge1p, rouge1r, rouge1f, rouge2p, rouge2r, rouge2f, rougelp, rougelr, rougelf = 0, 0, 0, 0, 0, 0, 0, 0, 0
     rouge = Rouge()
@@ -808,9 +846,10 @@ def gpt2_evaluate(model, length, data_loader, hps):
         gen_ids, gen_mask, _, premise_ids, premise_mask, premise_token_type_ids = batch
 
         # output = sample_sequence(model, length, device='cuda', context=premise_ids, batch_size=hps.batch_size, attention_mask=premise_mask, input_type='ids')
+        generation_offset = premise_ids.shape[-1]
         generated = model.generate(input_ids=premise_ids, 
                                    attention_mask=premise_mask, 
-                                   max_length=length+premise_ids.shape[1], 
+                                   max_length=length+generation_offset, 
                                    num_beams=5, 
                                    early_stopping=True, 
                                    do_sample=True,
@@ -820,12 +859,14 @@ def gpt2_evaluate(model, length, data_loader, hps):
 
         # generated = output[:, premise_ids.shape[1]:]
         # pdb.set_trace()
-        generated = generated[:, premise_ids.shape[1]:]
+        full_generated_text = [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in generated.cpu().tolist()]
 
+        generated = generated[:, generation_offset:]
         generated_text = [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in generated.cpu().tolist()]
+        print(f"\n\nGenerated text: {generated_text}")
         gold_text = [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in gen_ids.cpu().tolist()]
         input_text = [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in premise_ids]
-        output_text += [[input_text[i], gold_text[i], generated_text[i].split('.')[0]+'.'] for i in range(len(input_text))]
+        output_text += [[f"\n\nExample {i}\n", input_text[i], gold_text[i], generated_text[i].split('.')[0]+'.', f"\nFull gen text is: \n{full_generated_text[i]}"] for i in range(len(input_text))]
 
 
         for i in range(generated.shape[0]):
@@ -862,9 +903,9 @@ def gpt2_evaluate(model, length, data_loader, hps):
 
     num_instances = (len(data_loader)-1) * hps.batch_size + gen_ids.shape[0]
 
-    fo = open(hps.output_dir+'/gpt2_predict_'+nowtime+'.csv', 'w', encoding='utf-8')
-    writer = csv.writer(fo)
-    writer.writerows(output_text)
+    with open(hps.output_dir+'/gpt2_predict_'+nowtime+'.csv', 'w', encoding='utf-8') as fo:
+        writer = csv.writer(fo)
+        writer.writerows(output_text)
 
     return bleu1/num_instances, bleu2/num_instances, bleu3/num_instances, bleu4/num_instances, rouge1r/num_instances, rouge2r/num_instances, rougelr/num_instances
 
@@ -950,9 +991,9 @@ def bart_evaluate(model, data_loader, hps):
 
     num_instances = (len(data_loader)-1) * hps.batch_size + input_ids.shape[0]
 
-    fo = open(hps.output_dir+'/bart_predict_'+nowtime+'.csv', 'w', encoding='utf-8')
-    writer = csv.writer(fo)
-    writer.writerows(output_text)
+    with open(hps.output_dir+'/bart_predict_'+nowtime+'.csv', 'w', encoding='utf-8') as fo:
+        writer = csv.writer(fo)
+        writer.writerows(output_text)
 
     return bleu1/num_instances, bleu2/num_instances, bleu3/num_instances, bleu4/num_instances, rouge1r/num_instances, rouge2r/num_instances, rougelr/num_instances
 

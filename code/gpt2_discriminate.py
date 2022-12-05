@@ -1,5 +1,5 @@
 import argparse
-from utils.utils import load_data, define_logger, tokenize_gen, evaluate_gpt2, gpt2_evaluate, compute_ppl
+from utils.utils import load_data, define_logger
 import random
 import numpy as np
 import torch
